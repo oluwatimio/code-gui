@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'">
+  <title>Claude Code</title>
+  <link rel="stylesheet" href="../node_modules/highlight.js/styles/github-dark.min.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Custom Titlebar -->
+  <div id="titlebar">
+    <div class="titlebar-drag">
+      <button id="btn-toggle-sidebar" class="titlebar-btn titlebar-btn-sidebar" title="Toggle Sidebar (Ctrl+B)">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+          <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <svg class="titlebar-logo" width="18" height="18" viewBox="0 0 24 24" fill="none">
+        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="#00d26a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span class="titlebar-title">Claude Code</span>
+    </div>
+    <div class="titlebar-controls">
+      <button id="btn-minimize" class="titlebar-btn" title="Minimize">
+        <svg width="12" height="12" viewBox="0 0 12 12"><rect y="5" width="12" height="1.5" rx="0.75" fill="currentColor"/></svg>
+      </button>
+      <button id="btn-maximize" class="titlebar-btn" title="Maximize">
+        <svg width="12" height="12" viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" rx="1.5" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+      </button>
+      <button id="btn-close" class="titlebar-btn titlebar-btn-close" title="Close">
+        <svg width="12" height="12" viewBox="0 0 12 12"><path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Main App -->
+  <div id="app">
+    <!-- Sidebar -->
+    <aside id="sidebar">
+      <div class="sidebar-tabs">
+        <button class="sidebar-tab active" data-tab="chats">Chats</button>
+        <button class="sidebar-tab" data-tab="memories">Memories</button>
+      </div>
+
+      <!-- Chats Tab -->
+      <div id="tab-chats" class="tab-content active">
+        <div class="sidebar-header">
+          <button id="new-chat-btn" title="New Chat (Ctrl+N)">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path d="M8 1v14M1 8h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            <span>New Chat</span>
+          </button>
+        </div>
+        <div id="conversation-list"></div>
+      </div>
+
+      <!-- Memories Tab -->
+      <div id="tab-memories" class="tab-content">
+        <div class="sidebar-header">
+          <div class="memory-search-wrapper">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+            </svg>
+            <input id="memory-search" type="text" placeholder="Search memories..." />
+          </div>
+        </div>
+        <div id="memory-list"></div>
+        <div id="memory-empty" class="memory-empty hidden">
+          <p>No memories found</p>
+        </div>
+      </div>
+
+      <div class="sidebar-footer">
+        <button id="toggle-sidebar-btn" title="Toggle Sidebar">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <span class="version-label">v1.0.0</span>
+      </div>
+    </aside>
+
+    <!-- Chat Area -->
+    <main id="chat-area">
+      <!-- Welcome Screen -->
+      <div id="welcome">
+        <div class="welcome-content">
+          <div class="welcome-logo">
+            <svg width="56" height="56" viewBox="0 0 24 24" fill="none">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="#00d26a" opacity="0.15"/>
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="#00d26a" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <h1>Claude Code</h1>
+          <p class="welcome-subtitle">Your AI coding assistant, beautifully wrapped</p>
+          <div class="suggestion-chips">
+            <button class="chip" data-prompt="Explain how async/await works in JavaScript with examples">Explain async/await</button>
+            <button class="chip" data-prompt="Write a Python script that monitors CPU and memory usage">System monitor script</button>
+            <button class="chip" data-prompt="Help me write a Bash script to automate my Git workflow">Git automation</button>
+            <button class="chip" data-prompt="What are the best practices for writing clean, maintainable code?">Clean code tips</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Messages -->
+      <div id="messages" class="hidden"></div>
+
+      <!-- Input Area -->
+      <div id="input-area">
+        <div id="input-wrapper">
+          <textarea id="prompt-input" placeholder="Ask Claude anything..." rows="1" autofocus></textarea>
+          <div class="input-actions">
+            <button id="send-btn" title="Send (Enter)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M5 12h14M12 5l7 7-7 7" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <button id="stop-btn" class="hidden" title="Stop (Escape)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div id="input-footer">
+          <span id="status-text"></span>
+          <span id="cost-display"></span>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Permission Dialog -->
+  <div id="permission-overlay" class="hidden">
+    <div id="permission-dialog">
+      <div class="perm-header">
+        <div class="perm-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+            <path d="M12 9v4M12 17h.01" stroke="#00d26a" stroke-width="2" stroke-linecap="round"/>
+            <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="#00d26a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <h3>Permission Request</h3>
+      </div>
+      <p class="perm-description">Claude wants to use <strong id="perm-tool-name"></strong></p>
+      <div id="perm-detail" class="perm-code-block">
+        <pre><code id="perm-input-display"></code></pre>
+      </div>
+      <div class="perm-actions">
+        <button id="perm-deny" class="perm-btn perm-btn-deny">Deny</button>
+        <button id="perm-allow" class="perm-btn perm-btn-allow">Allow</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
