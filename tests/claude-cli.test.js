@@ -33,6 +33,13 @@ test('buildClaudeArgs: yolo swaps permission tool for --dangerously-skip-permiss
   assert.equal(args.includes('--permission-prompt-tool'), false);
 });
 
+test('buildClaudeArgs: built-in AskUserQuestion is disallowed so MCP ask_user is used', () => {
+  const args = buildClaudeArgs({});
+  const idx = args.indexOf('--disallowed-tools');
+  assert.notEqual(idx, -1);
+  assert.equal(args[idx + 1], 'AskUserQuestion');
+});
+
 test('buildClaudeArgs: --model only added when set', () => {
   const withoutModel = buildClaudeArgs({});
   assert.equal(withoutModel.includes('--model'), false);

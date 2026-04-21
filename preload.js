@@ -111,6 +111,8 @@ contextBridge.exposeInMainWorld('claude', {
   focusWindow: () => ipcRenderer.send('window:focus'),
   onPermissionRequest: (callback) => ipcRenderer.on('permission:request', (_, data) => callback(data)),
   respondPermission: (toolUseId, decision) => ipcRenderer.send('permission:response', { toolUseId, decision }),
+  onAskRequest: (callback) => ipcRenderer.on('ask:request', (_, data) => callback(data)),
+  respondAsk: (askId, payload) => ipcRenderer.send('ask:response', { askId, ...payload }),
   removeAllListeners: () => {
     ipcRenderer.removeAllListeners('claude:stream-start');
     ipcRenderer.removeAllListeners('claude:stream-delta');
@@ -123,6 +125,7 @@ contextBridge.exposeInMainWorld('claude', {
     ipcRenderer.removeAllListeners('claude:compact');
     ipcRenderer.removeAllListeners('claude:usage');
     ipcRenderer.removeAllListeners('permission:request');
+    ipcRenderer.removeAllListeners('ask:request');
   }
 });
 
@@ -136,6 +139,7 @@ contextBridge.exposeInMainWorld('project', {
 
 contextBridge.exposeInMainWorld('files', {
   listDir: (roots, dirPath) => ipcRenderer.invoke('fs:list-dir', roots, dirPath),
+  listAll: (roots) => ipcRenderer.invoke('fs:list-all-files', roots),
   readFile: (roots, filePath) => ipcRenderer.invoke('fs:read-file', roots, filePath),
   pathInfo: (roots, p) => ipcRenderer.invoke('fs:path-info', roots, p),
   pickAttachments: () => ipcRenderer.invoke('files:pick-attachments'),

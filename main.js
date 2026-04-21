@@ -20,6 +20,7 @@ const claudeProcesses = new Map(); // convId -> child
 let permissionServer = null;
 let permissionPort = null;
 const pendingPermissions = new Map(); // toolUseId -> res
+const pendingAsks = new Map(); // askId -> res
 let mcpConfigPath = null;
 let contextDb = null;
 
@@ -145,6 +146,24 @@ function startPermissionServer() {
         return;
       }
 
+      if (req.url === '/ask') {
+        try {
+          const data = await readJson(req);
+          const askId = `ask-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          pendingAsks.set(askId, res);
+          mainWindow.webContents.send('ask:request', {
+            askId,
+            question: data.question || '',
+            options: Array.isArray(data.options) ? data.options : [],
+            context: data.context || '',
+            convId: data.conv_id || null,
+          });
+        } catch (e) {
+          writeJson(res, 400, { canceled: true, error: 'Bad request' });
+        }
+        return;
+      }
+
       if (req.url.startsWith('/context/')) {
         try {
           const data = await readJson(req);
@@ -175,6 +194,17 @@ ipcMain.on('permission:response', (_, payload) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(decision));
     pendingPermissions.delete(toolUseId);
+  }
+});
+
+// Handle ask-user response from renderer
+ipcMain.on('ask:response', (_, payload) => {
+  const { askId, answer, canceled } = payload || {};
+  const res = askId ? pendingAsks.get(askId) : null;
+  if (res) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(canceled ? { canceled: true } : { answer: answer || '' }));
+    pendingAsks.delete(askId);
   }
 });
 
@@ -343,6 +373,12 @@ function writeMcpConfig() {
         type: 'stdio',
         command: nodeBin,
         args: [getMcpServerPath('mcp-context-server.js')],
+        env: portEnv
+      },
+      'gui_ask': {
+        type: 'stdio',
+        command: nodeBin,
+        args: [getMcpServerPath('mcp-ask-server.js')],
         env: portEnv
       }
     }
@@ -615,6 +651,44 @@ ipcMain.handle('fs:list-dir', async (_, roots, dirPath) => {
     if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
     return a.name.localeCompare(b.name);
   });
+  return out;
+});
+
+ipcMain.handle('fs:list-all-files', async (_, roots) => {
+  if (!Array.isArray(roots) || roots.length === 0) return [];
+  const MAX = 15000;
+  const out = [];
+  const walk = (rootAbs, currentAbs) => {
+    if (out.length >= MAX) return;
+    let entries;
+    try {
+      entries = fs.readdirSync(currentAbs, { withFileTypes: true });
+    } catch (e) { return; }
+    for (const e of entries) {
+      if (out.length >= MAX) return;
+      if (SKIP_DIR_NAMES.has(e.name)) continue;
+      if (e.name.startsWith('.') && e.name !== '.env') continue;
+      const full = path.join(currentAbs, e.name);
+      if (e.isDirectory()) {
+        const rel = path.relative(rootAbs, full);
+        if (rel) out.push({ root: rootAbs, rel, type: 'dir' });
+        walk(rootAbs, full);
+      } else if (e.isFile()) {
+        const rel = path.relative(rootAbs, full);
+        if (rel) out.push({ root: rootAbs, rel, type: 'file' });
+      }
+    }
+  };
+  for (const root of roots) {
+    if (!root) continue;
+    const rootAbs = path.resolve(root);
+    try {
+      const stat = fs.statSync(rootAbs);
+      if (!stat.isDirectory()) continue;
+    } catch (e) { continue; }
+    walk(rootAbs, rootAbs);
+    if (out.length >= MAX) break;
+  }
   return out;
 });
 

@@ -46,6 +46,7 @@ function effectiveProjectPath(conv) {
 const welcomeEl = document.getElementById('welcome');
 const messagesEl = document.getElementById('messages');
 const inputEl = document.getElementById('prompt-input');
+const filePickerEl = document.getElementById('file-picker');
 const sendBtn = document.getElementById('send-btn');
 const stopBtn = document.getElementById('stop-btn');
 const statusText = document.getElementById('status-text');
@@ -71,6 +72,10 @@ const wsTabsEl = document.getElementById('ws-tabs');
 const wsTreeEl = document.getElementById('ws-tree');
 const wsTilesEl = document.getElementById('ws-tiles');
 const wsVSplitter = document.getElementById('ws-vsplitter');
+const wsToolsListEl = document.getElementById('ws-tools-list');
+const wsToolsFiltersEl = document.getElementById('ws-tools-filters');
+const wsToolsCountEl = document.getElementById('ws-tools-count');
+const wsFilesDotEl = document.getElementById('ws-files-dot');
 const toggleWorkspaceBtn = document.getElementById('btn-toggle-workspace');
 const togglePrBtn = document.getElementById('btn-toggle-pr');
 const prPanel = document.getElementById('pr-panel');
@@ -651,6 +656,8 @@ function switchConversation(id) {
   renderWsTabs();
   renderWsTree();
   restoreOpenFiles();
+  renderToolsView();
+  setFilesActivityDot(false);
   if (state.terminalOpen) mountTerminal();
   saveState();
 }
@@ -698,6 +705,52 @@ async function deleteConversation(id) {
   renderConversationList();
 }
 
+function renameConversation(id, newTitle) {
+  const conv = state.conversations.find((c) => c.id === id);
+  if (!conv) return;
+  const trimmed = (newTitle || '').trim();
+  if (!trimmed || trimmed === conv.title) return;
+  conv.title = trimmed.slice(0, 200);
+  saveState();
+  renderConversationList();
+}
+
+function startRenameConversation(id, titleEl) {
+  const conv = state.conversations.find((c) => c.id === id);
+  if (!conv) return;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'conv-title-input';
+  input.value = conv.title;
+  input.spellcheck = false;
+  titleEl.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let committed = false;
+  const commit = (save) => {
+    if (committed) return;
+    committed = true;
+    if (save) {
+      renameConversation(id, input.value);
+    } else {
+      renderConversationList();
+    }
+  };
+  input.onclick = (e) => e.stopPropagation();
+  input.ondblclick = (e) => e.stopPropagation();
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commit(true);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      commit(false);
+    }
+  };
+  input.onblur = () => commit(true);
+}
+
 function renderConversationList() {
   conversationList.innerHTML = '';
   for (const conv of state.conversations) {
@@ -713,6 +766,10 @@ function renderConversationList() {
       dot.className = 'conv-streaming-dot';
       title.appendChild(dot);
     }
+    title.ondblclick = (e) => {
+      e.stopPropagation();
+      startRenameConversation(conv.id, title);
+    };
     item.appendChild(title);
 
     if (conv.projectPath) {
@@ -724,6 +781,19 @@ function renderConversationList() {
       sub.querySelector('span').textContent = basename(conv.projectPath);
       item.appendChild(sub);
     }
+
+    const renameBtn = document.createElement('button');
+    renameBtn.className = 'rename-btn';
+    renameBtn.title = 'Rename chat';
+    renameBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 20h9"/>
+      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+    </svg>`;
+    renameBtn.onclick = (e) => {
+      e.stopPropagation();
+      startRenameConversation(conv.id, title);
+    };
+    item.appendChild(renameBtn);
 
     const delBtn = document.createElement('button');
     delBtn.className = 'delete-btn';
@@ -758,6 +828,7 @@ function newChat() {
   wsTilesEl.innerHTML = '';
   renderWsTabs();
   renderWsTree();
+  renderToolsView();
   inputEl.focus();
 }
 
@@ -1016,6 +1087,7 @@ function finalizeStream(convId, { save = true } = {}) {
   if (isCurrentConv(convId)) {
     updateInputControlsForCurrent();
     inputEl.focus();
+    updateToolsCountBadge(conv);
   }
   renderConversationList();
 }
@@ -1095,6 +1167,9 @@ function handleStreamError(data) {
   notifyChatFinished(convId, { kind: 'error', detail: String(errText).slice(0, 120) });
   saveState();
   renderConversationList();
+  if (currentAskData && (!currentAskData.convId || currentAskData.convId === convId)) {
+    hideAskDialog();
+  }
 }
 
 function handleStreamClose(data) {
@@ -1106,6 +1181,10 @@ function handleStreamClose(data) {
     if (isCurrentConv(convId)) {
       setStatus(hadContent ? 'ready' : 'error', hadContent ? 'Ready' : 'No response received');
     }
+  }
+  // If the ask dialog is open for this conv, close it — the process is gone.
+  if (currentAskData && (!currentAskData.convId || currentAskData.convId === convId)) {
+    hideAskDialog();
   }
 }
 
@@ -1197,6 +1276,72 @@ function hidePermissionDialog() {
   permOverlay.classList.add('hidden');
 }
 
+// ===== Ask-User Dialog =====
+const askOverlay = document.getElementById('ask-overlay');
+const askQuestionEl = document.getElementById('ask-question');
+const askContextEl = document.getElementById('ask-context');
+const askOptionsEl = document.getElementById('ask-options');
+const askAnswerInput = document.getElementById('ask-answer-input');
+const askSubmitBtn = document.getElementById('ask-submit');
+const askCancelBtn = document.getElementById('ask-cancel');
+
+let currentAskData = null;
+
+function showAskDialog(data) {
+  currentAskData = data;
+  askQuestionEl.textContent = data.question || '';
+  if (data.context) {
+    askContextEl.textContent = data.context;
+    askContextEl.classList.remove('hidden');
+  } else {
+    askContextEl.textContent = '';
+    askContextEl.classList.add('hidden');
+  }
+  askOptionsEl.innerHTML = '';
+  const options = Array.isArray(data.options) ? data.options : [];
+  if (options.length) {
+    for (const opt of options) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'ask-option';
+      btn.textContent = opt;
+      btn.addEventListener('click', () => submitAskAnswer(opt));
+      askOptionsEl.appendChild(btn);
+    }
+    askOptionsEl.classList.remove('hidden');
+  } else {
+    askOptionsEl.classList.add('hidden');
+  }
+  askAnswerInput.value = '';
+  askOverlay.classList.remove('hidden');
+  askAnswerInput.focus();
+}
+
+function hideAskDialog() {
+  askOverlay.classList.add('hidden');
+  currentAskData = null;
+}
+
+function submitAskAnswer(answerText) {
+  if (!currentAskData) return;
+  const askId = currentAskData.askId;
+  const answer = (answerText ?? askAnswerInput.value ?? '').trim();
+  if (!answer) {
+    askAnswerInput.focus();
+    return;
+  }
+  window.claude.respondAsk(askId, { answer });
+  hideAskDialog();
+  setStatus('streaming', 'Generating...');
+}
+
+function cancelAskAnswer() {
+  if (!currentAskData) return;
+  window.claude.respondAsk(currentAskData.askId, { canceled: true });
+  hideAskDialog();
+  setStatus('streaming', 'Generating...');
+}
+
 // ===== Event Listeners =====
 // ===== Workspace Panel =====
 function workspaceRoots(conv) {
@@ -1209,6 +1354,237 @@ function workspaceRoots(conv) {
     for (const d of c.extraDirs) if (d) roots.push(d);
   }
   return roots;
+}
+
+// ===== @-mention file picker =====
+
+const filePicker = {
+  open: false,
+  anchor: -1,       // index of '@' in textarea value
+  query: '',
+  results: [],      // [{ root, rel }]
+  selected: 0,
+  cache: new Map(), // rootsKey -> Promise<Array<{root, rel}>>
+};
+
+function getRootsKey(roots) {
+  return roots.slice().sort().join('|');
+}
+
+async function loadFileListForCurrent() {
+  const roots = workspaceRoots();
+  if (!roots.length) return [];
+  const key = getRootsKey(roots);
+  if (!filePicker.cache.has(key)) {
+    filePicker.cache.set(key, window.files.listAll(roots).catch(() => []));
+  }
+  return filePicker.cache.get(key);
+}
+
+function invalidateFilePickerCache() {
+  filePicker.cache.clear();
+}
+
+function fuzzyScore(query, target) {
+  // Subsequence match with bonuses for boundary/prefix matches.
+  // Returns { score, matchPositions } or null if no match.
+  const q = query.toLowerCase();
+  const t = target.toLowerCase();
+  if (!q) return { score: 0, positions: [] };
+  const tl = t.length;
+  let ti = 0;
+  let score = 0;
+  let streak = 0;
+  const positions = [];
+  for (let qi = 0; qi < q.length; qi++) {
+    const qc = q[qi];
+    let found = -1;
+    while (ti < tl) {
+      if (t[ti] === qc) { found = ti; break; }
+      ti++;
+    }
+    if (found === -1) return null;
+    positions.push(found);
+    // Prefix of filename (after last '/')
+    const lastSlash = t.lastIndexOf('/', found);
+    if (found === lastSlash + 1) score += 6;
+    // Start of whole path
+    if (found === 0) score += 4;
+    // Boundary (after '/', '-', '_', '.')
+    else if (/[\/\-_\.]/.test(t[found - 1])) score += 3;
+    // Contiguous streak bonus
+    if (found === ti) { streak++; score += streak * 2; } else { streak = 1; }
+    // Small penalty for gaps
+    score -= Math.min(ti - (found - 1), 4);
+    ti = found + 1;
+  }
+  // Shorter paths win ties
+  score -= Math.min(tl * 0.05, 4);
+  return { score, positions };
+}
+
+function rankFiles(files, query) {
+  if (!query) {
+    // Default sort when query is empty: files before dirs, then shortest paths first
+    return files
+      .slice()
+      .sort((a, b) => {
+        if (a.type !== b.type) return a.type === 'file' ? -1 : 1;
+        return a.rel.length - b.rel.length;
+      })
+      .slice(0, 50);
+  }
+  const scored = [];
+  for (const f of files) {
+    const res = fuzzyScore(query, f.rel);
+    if (!res) continue;
+    // Small penalty for dirs so matching files outrank matching dirs at equal base score
+    const score = res.score - (f.type === 'dir' ? 2 : 0);
+    scored.push({ f, score, positions: res.positions });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, 50).map((s) => ({ ...s.f, _positions: s.positions }));
+}
+
+function detectFilePickerTrigger() {
+  if (!inputEl) return;
+  const val = inputEl.value;
+  const caret = inputEl.selectionStart;
+  if (caret !== inputEl.selectionEnd) { closeFilePicker(); return; }
+  // Walk back from caret to find an unescaped '@' preceded by start-of-input or whitespace
+  let i = caret - 1;
+  let atPos = -1;
+  while (i >= 0) {
+    const ch = val[i];
+    if (ch === '@') {
+      const prev = i > 0 ? val[i - 1] : '';
+      if (i === 0 || /\s/.test(prev)) atPos = i;
+      break;
+    }
+    if (/\s/.test(ch)) break;
+    i--;
+  }
+  if (atPos === -1) { closeFilePicker(); return; }
+  const query = val.slice(atPos + 1, caret);
+  // Only letters/digits/._-/ are valid in a file query; space / other chars close
+  if (!/^[a-zA-Z0-9._\-\/]*$/.test(query)) { closeFilePicker(); return; }
+  openFilePicker(atPos, query);
+}
+
+async function openFilePicker(anchor, query) {
+  filePicker.open = true;
+  filePicker.anchor = anchor;
+  filePicker.query = query;
+  filePicker.selected = 0;
+  const files = await loadFileListForCurrent();
+  // If the picker was closed while awaiting, bail
+  if (!filePicker.open || filePicker.anchor !== anchor) return;
+  filePicker.results = rankFiles(files, query);
+  filePicker.selected = 0;
+  renderFilePicker();
+}
+
+function closeFilePicker() {
+  if (!filePicker.open) return;
+  filePicker.open = false;
+  filePicker.anchor = -1;
+  filePicker.query = '';
+  filePicker.results = [];
+  filePicker.selected = 0;
+  if (filePickerEl) filePickerEl.classList.add('hidden');
+}
+
+function moveFilePickerSelection(delta) {
+  if (!filePicker.open || !filePicker.results.length) return;
+  const n = filePicker.results.length;
+  filePicker.selected = ((filePicker.selected + delta) % n + n) % n;
+  renderFilePicker();
+}
+
+function acceptFilePickerSelection() {
+  if (!filePicker.open || !filePicker.results.length) return false;
+  const pick = filePicker.results[filePicker.selected];
+  if (!pick) return false;
+  const anchor = filePicker.anchor;
+  const caret = inputEl.selectionStart;
+  const before = inputEl.value.slice(0, anchor);
+  const after = inputEl.value.slice(caret);
+  const suffix = pick.type === 'dir' ? '/' : '';
+  const insertion = `@${pick.rel}${suffix}`;
+  const needsSpace = pick.type === 'file' && !after.startsWith(' ');
+  const newVal = before + insertion + (needsSpace ? ' ' : '') + after;
+  inputEl.value = newVal;
+  const newCaret = (before + insertion + (needsSpace ? ' ' : '')).length;
+  inputEl.setSelectionRange(newCaret, newCaret);
+  closeFilePicker();
+  autoResize();
+  return true;
+}
+
+function highlightMatches(text, positions) {
+  if (!positions || !positions.length) return escapeHtml(text);
+  const set = new Set(positions);
+  let out = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = escapeHtml(text[i]);
+    out += set.has(i) ? `<mark>${ch}</mark>` : ch;
+  }
+  return out;
+}
+
+function renderFilePicker() {
+  if (!filePickerEl) return;
+  if (!filePicker.open) { filePickerEl.classList.add('hidden'); return; }
+  filePickerEl.innerHTML = '';
+  if (!filePicker.results.length) {
+    const empty = document.createElement('div');
+    empty.className = 'file-picker-empty';
+    empty.textContent = filePicker.query
+      ? `No files match “${filePicker.query}”`
+      : 'No files found in this project.';
+    filePickerEl.appendChild(empty);
+    filePickerEl.classList.remove('hidden');
+    return;
+  }
+  filePicker.results.forEach((entry, idx) => {
+    const item = document.createElement('div');
+    item.className = 'file-picker-item' + (idx === filePicker.selected ? ' selected' : '') + (entry.type === 'dir' ? ' is-dir' : '');
+    const slash = entry.rel.lastIndexOf('/');
+    const dir = slash >= 0 ? entry.rel.slice(0, slash) : '';
+    const name = slash >= 0 ? entry.rel.slice(slash + 1) : entry.rel;
+    const baseOffset = slash >= 0 ? slash + 1 : 0;
+    const namePositions = (entry._positions || []).filter((p) => p >= baseOffset).map((p) => p - baseOffset);
+    const dirPositions = (entry._positions || []).filter((p) => p < baseOffset);
+
+    const icon = document.createElement('span');
+    icon.className = 'file-picker-icon';
+    icon.innerHTML = entry.type === 'dir'
+      ? `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`
+      : `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
+    item.appendChild(icon);
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'file-picker-name';
+    nameEl.innerHTML = highlightMatches(name, namePositions) + (entry.type === 'dir' ? '/' : '');
+    item.appendChild(nameEl);
+
+    if (dir) {
+      const dirEl = document.createElement('span');
+      dirEl.className = 'file-picker-dir';
+      dirEl.innerHTML = highlightMatches(dir, dirPositions);
+      item.appendChild(dirEl);
+    }
+    item.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      filePicker.selected = idx;
+      acceptFilePickerSelection();
+      inputEl.focus();
+    });
+    filePickerEl.appendChild(item);
+  });
+  filePickerEl.classList.remove('hidden');
+  const selEl = filePickerEl.children[filePicker.selected];
+  if (selEl && selEl.scrollIntoView) selEl.scrollIntoView({ block: 'nearest' });
 }
 
 function ensureWsState(conv) {
@@ -1455,6 +1831,7 @@ async function openFile(filePath, opts = {}) {
     applyRightPanelVisibility();
     saveState();
   }
+  if (!opts.silent) markFilesActivity();
 
   const existing = findPane(filePath);
   if (existing) {
@@ -1859,6 +2236,7 @@ function handleToolResult(data) {
   if (!tc) return;
   tc.result = data.text || '';
   tc.status = data.isError ? 'error' : 'done';
+  updateToolCallInToolsView(conv.id, data);
   if (!isCurrentConv(conv.id)) return;
   const msgEl = assistantElByConv.get(conv.id);
   if (!msgEl) return;
@@ -1879,6 +2257,7 @@ function recordToolCall(conv, data) {
     status: 'running',
   };
   conv.streamToolCalls.push(entry);
+  appendToolCallToToolsView(conv, entry);
   if (!isCurrentConv(conv.id)) return;
   const msgEl = assistantElByConv.get(conv.id);
   if (!msgEl) return;
@@ -2123,6 +2502,214 @@ function renderToolCallBody(entry) {
   }
 
   return parts.join('');
+}
+
+// ===== Tools view (right panel) =====
+
+let currentWorkspaceView = 'workspace';
+let toolsFilter = 'all';
+
+const TOOLS_FILTER_DEFS = [
+  { id: 'all',     label: 'All' },
+  { id: 'errors',  label: 'Errors' },
+  { id: 'running', label: 'Running' },
+  { id: 'bash',    label: 'Bash' },
+  { id: 'write',   label: 'Edits' },
+  { id: 'read',    label: 'Reads' },
+  { id: 'search',  label: 'Search' },
+  { id: 'task',    label: 'Agents' },
+  { id: 'todo',    label: 'Todo' },
+  { id: 'web',     label: 'Web' },
+];
+
+function matchesToolsFilter(entry, filter) {
+  if (!filter || filter === 'all') return true;
+  if (filter === 'errors') return entry.status === 'error';
+  if (filter === 'running') return entry.status === 'running';
+  return toolFamily(entry.name) === filter;
+}
+
+function computeToolsCounts(entries) {
+  const counts = { all: entries.length, errors: 0, running: 0 };
+  for (const e of entries) {
+    if (e.status === 'error') counts.errors++;
+    if (e.status === 'running') counts.running++;
+    const fam = toolFamily(e.name);
+    counts[fam] = (counts[fam] || 0) + 1;
+  }
+  return counts;
+}
+
+function renderToolsFilterChips(entries) {
+  if (!wsToolsFiltersEl) return;
+  const counts = computeToolsCounts(entries);
+  wsToolsFiltersEl.innerHTML = '';
+  if (!entries.length) return;
+  // If the active filter now has zero entries, fall back to 'all'
+  if (toolsFilter !== 'all' && !counts[toolsFilter]) toolsFilter = 'all';
+  for (const def of TOOLS_FILTER_DEFS) {
+    const n = counts[def.id] || 0;
+    if (def.id !== 'all' && n === 0) continue;
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'ws-tools-chip' + (toolsFilter === def.id ? ' active' : '');
+    chip.dataset.filter = def.id;
+    const label = document.createElement('span');
+    label.textContent = def.label;
+    const count = document.createElement('span');
+    count.className = 'ws-tools-chip-count';
+    count.textContent = String(n);
+    chip.appendChild(label);
+    chip.appendChild(count);
+    chip.addEventListener('click', () => {
+      if (toolsFilter === def.id) return;
+      toolsFilter = def.id;
+      renderToolsView();
+    });
+    wsToolsFiltersEl.appendChild(chip);
+  }
+}
+
+function jumpToToolCallMessage(toolCallId) {
+  if (!toolCallId) return;
+  const target = messagesEl.querySelector(`.tool-call[data-id="${cssEscape(toolCallId)}"]`);
+  if (!target) return;
+  // Make sure any ancestor tool-calls-block is expanded and the entry itself
+  const block = target.closest('.tool-calls-block');
+  if (block) block.classList.add('expanded');
+  target.classList.add('expanded');
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  target.classList.remove('tc-jump-highlight');
+  // Force reflow so animation restarts on repeated jumps
+  void target.offsetWidth;
+  target.classList.add('tc-jump-highlight');
+  setTimeout(() => target.classList.remove('tc-jump-highlight'), 1500);
+}
+
+function createPanelToolCallEntry(entry) {
+  const el = createToolCallEntry(entry);
+  const header = el.querySelector('.tool-call-header');
+  if (header) {
+    const jumpBtn = document.createElement('button');
+    jumpBtn.type = 'button';
+    jumpBtn.className = 'tc-jump-btn';
+    jumpBtn.title = 'Jump to message';
+    jumpBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="7" y1="17" x2="17" y2="7"/>
+      <polyline points="7 7 17 7 17 17"/>
+    </svg>`;
+    jumpBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      jumpToToolCallMessage(entry.id);
+    });
+    const chevron = header.querySelector('.tool-call-chevron');
+    if (chevron) header.insertBefore(jumpBtn, chevron);
+    else header.appendChild(jumpBtn);
+  }
+  return el;
+}
+
+function switchWorkspaceView(name) {
+  if (name !== 'workspace' && name !== 'tools') return;
+  currentWorkspaceView = name;
+  document.querySelectorAll('.ws-view-tab').forEach((t) => {
+    t.classList.toggle('active', t.dataset.view === name);
+  });
+  document.querySelectorAll('#workspace-panel .ws-view').forEach((v) => {
+    v.classList.toggle('active', v.dataset.view === name);
+  });
+  if (name === 'workspace') setFilesActivityDot(false);
+  if (name === 'tools') renderToolsView();
+}
+
+function setFilesActivityDot(on) {
+  if (!wsFilesDotEl) return;
+  wsFilesDotEl.hidden = !on;
+}
+
+function markFilesActivity() {
+  if (currentWorkspaceView !== 'workspace') setFilesActivityDot(true);
+}
+
+function collectConversationToolCalls(conv) {
+  const out = [];
+  if (!conv) return out;
+  for (const msg of (conv.messages || [])) {
+    if (Array.isArray(msg.toolCalls)) out.push(...msg.toolCalls);
+  }
+  if (Array.isArray(conv.streamToolCalls)) out.push(...conv.streamToolCalls);
+  return out;
+}
+
+function updateToolsCountBadge(conv) {
+  if (!wsToolsCountEl) return;
+  const count = collectConversationToolCalls(conv).length;
+  if (count > 0) {
+    wsToolsCountEl.textContent = count > 99 ? '99+' : String(count);
+    wsToolsCountEl.hidden = false;
+  } else {
+    wsToolsCountEl.textContent = '';
+    wsToolsCountEl.hidden = true;
+  }
+}
+
+function renderToolsView() {
+  if (!wsToolsListEl) return;
+  const conv = getCurrentConversation();
+  const entries = collectConversationToolCalls(conv);
+  updateToolsCountBadge(conv);
+  renderToolsFilterChips(entries);
+  wsToolsListEl.innerHTML = '';
+  if (!entries.length) {
+    const empty = document.createElement('div');
+    empty.className = 'ws-tools-empty';
+    empty.textContent = conv
+      ? 'No tools have run in this chat yet.'
+      : 'Start a chat to see tool activity here.';
+    wsToolsListEl.appendChild(empty);
+    return;
+  }
+  const filtered = entries.filter((e) => matchesToolsFilter(e, toolsFilter));
+  if (!filtered.length) {
+    const empty = document.createElement('div');
+    empty.className = 'ws-tools-empty';
+    empty.textContent = 'No tool calls match this filter.';
+    wsToolsListEl.appendChild(empty);
+    return;
+  }
+  for (const entry of filtered) {
+    wsToolsListEl.appendChild(createPanelToolCallEntry(entry));
+  }
+  wsToolsListEl.scrollTop = wsToolsListEl.scrollHeight;
+}
+
+function appendToolCallToToolsView(conv, entry) {
+  if (!wsToolsListEl) return;
+  updateToolsCountBadge(conv);
+  if (!isCurrentConv(conv.id)) return;
+  renderToolsFilterChips(collectConversationToolCalls(conv));
+  if (!matchesToolsFilter(entry, toolsFilter)) return;
+  const empty = wsToolsListEl.querySelector('.ws-tools-empty');
+  if (empty) empty.remove();
+  wsToolsListEl.appendChild(createPanelToolCallEntry(entry));
+  wsToolsListEl.scrollTop = wsToolsListEl.scrollHeight;
+}
+
+function updateToolCallInToolsView(convId, data) {
+  if (!wsToolsListEl) return;
+  const conv = getConversation(convId);
+  updateToolsCountBadge(conv);
+  if (!isCurrentConv(convId)) return;
+  // Status-based filters can re-partition the list on result; simpler to re-render.
+  if (toolsFilter === 'running' || toolsFilter === 'errors') {
+    renderToolsView();
+    return;
+  }
+  renderToolsFilterChips(collectConversationToolCalls(conv));
+  const el = wsToolsListEl.querySelector(`.tool-call[data-id="${cssEscape(data.id)}"]`);
+  if (!el) return;
+  const tc = (conv?.streamToolCalls || []).find((c) => c.id === data.id);
+  if (tc) updateToolCallEntry(el, tc);
 }
 
 function renderTodoList(todos) {
@@ -3182,6 +3769,7 @@ function init() {
   renderWsTabs();
   renderWsTree();
   restoreOpenFiles();
+  renderToolsView();
   if (state.rightPanel === 'pr') openPrPanel();
   setupVerticalSplit();
   if (state.terminalOpen && !getCurrentConversation()) state.terminalOpen = false;
@@ -3262,9 +3850,51 @@ function init() {
     setStatus('streaming', 'Generating...');
   });
 
+  // Ask-user dialog
+  window.claude.onAskRequest((data) => {
+    if (data.convId && data.convId !== state.currentConversationId && getConversation(data.convId)) {
+      switchConversation(data.convId);
+    }
+    showAskDialog(data);
+    setStatus('streaming', 'Waiting for your answer...');
+  });
+
+  askSubmitBtn.addEventListener('click', () => submitAskAnswer());
+  askCancelBtn.addEventListener('click', () => cancelAskAnswer());
+  askAnswerInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      submitAskAnswer();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancelAskAnswer();
+    }
+  });
+
   // Input
-  inputEl.addEventListener('input', autoResize);
+  inputEl.addEventListener('input', () => {
+    autoResize();
+    detectFilePickerTrigger();
+  });
+  inputEl.addEventListener('click', detectFilePickerTrigger);
+  inputEl.addEventListener('keyup', (e) => {
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') {
+      detectFilePickerTrigger();
+    }
+  });
+  inputEl.addEventListener('blur', () => {
+    // Delay so mousedown on a picker item can fire first
+    setTimeout(() => closeFilePicker(), 120);
+  });
   inputEl.addEventListener('keydown', (e) => {
+    if (filePicker.open) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); moveFilePickerSelection(1); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); moveFilePickerSelection(-1); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        if (acceptFilePickerSelection()) { e.preventDefault(); return; }
+      }
+      if (e.key === 'Escape') { e.preventDefault(); closeFilePicker(); return; }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendMessage(inputEl.value);
@@ -3284,6 +3914,11 @@ function init() {
   // Sidebar tabs
   sidebarTabs.forEach(tab => {
     tab.addEventListener('click', () => switchSidebarTab(tab.getAttribute('data-tab')));
+  });
+
+  // Workspace view tabs (Files / Tools)
+  document.querySelectorAll('.ws-view-tab').forEach((tab) => {
+    tab.addEventListener('click', () => switchWorkspaceView(tab.dataset.view));
   });
   memorySearchEl.addEventListener('input', () => {
     clearTimeout(memorySearchDebounce);

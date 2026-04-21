@@ -61,6 +61,10 @@
       {
         "from": "mcp-context-server.js",
         "to": "mcp-context-server.js"
+      },
+      {
+        "from": "mcp-ask-server.js",
+        "to": "mcp-ask-server.js"
       }
     ],
     "files": [

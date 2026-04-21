@@ -169,6 +169,7 @@
             <span>Add context</span>
           </button>
         </div>
+        <div id="file-picker" class="file-picker hidden"></div>
         <div id="input-wrapper">
           <div id="attachments-list" class="hidden"></div>
           <textarea id="prompt-input" placeholder="Ask Claude anything..." rows="1" autofocus></textarea>
@@ -236,12 +237,28 @@
     <!-- Workspace Panel -->
     <aside id="workspace-panel" class="collapsed">
       <div class="side-resize side-resize-left" id="workspace-resize" title="Drag to resize"></div>
-      <div class="ws-tabs" id="ws-tabs"></div>
-      <div class="ws-tree-wrap">
-        <div class="ws-tree" id="ws-tree"></div>
+      <div class="ws-view-tabs">
+        <button class="ws-view-tab active" data-view="workspace">
+          <span>Files</span>
+          <span class="ws-view-tab-dot" id="ws-files-dot" hidden></span>
+        </button>
+        <button class="ws-view-tab" data-view="tools">
+          <span>Tools</span>
+          <span class="ws-view-tab-count" id="ws-tools-count" hidden></span>
+        </button>
       </div>
-      <div class="ws-vsplitter" id="ws-vsplitter" title="Drag to resize"></div>
-      <div class="ws-tiles" id="ws-tiles"></div>
+      <div class="ws-view active" data-view="workspace">
+        <div class="ws-tabs" id="ws-tabs"></div>
+        <div class="ws-tree-wrap">
+          <div class="ws-tree" id="ws-tree"></div>
+        </div>
+        <div class="ws-vsplitter" id="ws-vsplitter" title="Drag to resize"></div>
+        <div class="ws-tiles" id="ws-tiles"></div>
+      </div>
+      <div class="ws-view" data-view="tools">
+        <div id="ws-tools-filters"></div>
+        <div id="ws-tools-list"></div>
+      </div>
     </aside>
 
     <!-- PR Panel -->
@@ -315,6 +332,30 @@
         </button>
       </div>
       <div id="file-modal-body" class="file-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Ask-User Dialog -->
+  <div id="ask-overlay" class="hidden">
+    <div id="ask-dialog">
+      <div class="ask-header">
+        <div class="ask-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#00d26a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            <path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.29V13" stroke-linecap="round"/>
+            <circle cx="12" cy="16" r="0.6" fill="#00d26a" stroke="none"/>
+          </svg>
+        </div>
+        <h3>Claude has a question</h3>
+      </div>
+      <div id="ask-question" class="ask-question"></div>
+      <div id="ask-context" class="ask-context hidden"></div>
+      <div id="ask-options" class="ask-options hidden"></div>
+      <textarea id="ask-answer-input" class="ask-answer-input" rows="3" placeholder="Type your answer… (Cmd/Ctrl+Enter to send)"></textarea>
+      <div class="ask-actions">
+        <button id="ask-cancel" class="perm-btn perm-btn-deny">Cancel</button>
+        <button id="ask-submit" class="perm-btn perm-btn-allow">Send answer</button>
+      </div>
     </div>
   </div>
 
