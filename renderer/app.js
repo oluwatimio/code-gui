@@ -481,9 +481,10 @@ function renderFilesAccessedBlock(msgEl, filesAccessed) {
   }
 }
 
-function createMessageEl(role, content, isStreaming = false, thinking = '', attachments = null, filesAccessed = null, toolCalls = null) {
+function createMessageEl(role, content, isStreaming = false, thinking = '', attachments = null, filesAccessed = null, toolCalls = null, messageIndex = null) {
   const msg = document.createElement('div');
   msg.className = `message message-${role}`;
+  if (messageIndex != null) msg.dataset.msgIndex = String(messageIndex);
 
   const header = document.createElement('div');
   header.className = 'message-header';
@@ -509,6 +510,23 @@ function createMessageEl(role, content, isStreaming = false, thinking = '', atta
 
   header.appendChild(avatar);
   header.appendChild(roleLabel);
+
+  if (role === 'user' && messageIndex != null) {
+    const rewindBtn = document.createElement('button');
+    rewindBtn.type = 'button';
+    rewindBtn.className = 'message-rewind-btn';
+    rewindBtn.title = 'Rewind to this point';
+    rewindBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="1 4 1 10 7 10"/>
+      <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+    </svg>`;
+    rewindBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = Number(msg.dataset.msgIndex);
+      if (Number.isFinite(idx)) requestRewindTo(idx);
+    });
+    header.appendChild(rewindBtn);
+  }
 
   const body = document.createElement('div');
   body.className = 'message-body';
@@ -616,13 +634,13 @@ function switchConversation(id) {
 
   // Re-render messages
   messagesEl.innerHTML = '';
-  for (const msg of conv.messages) {
+  conv.messages.forEach((msg, idx) => {
     if (msg.role === 'compact') {
       messagesEl.appendChild(createCompactBannerEl(msg));
-      continue;
+      return;
     }
-    messagesEl.appendChild(createMessageEl(msg.role, msg.content, false, msg.thinking || '', msg.attachments || null, msg.filesAccessed || null, msg.toolCalls || null));
-  }
+    messagesEl.appendChild(createMessageEl(msg.role, msg.content, false, msg.thinking || '', msg.attachments || null, msg.filesAccessed || null, msg.toolCalls || null, idx));
+  });
 
   // If this conversation is streaming, rebuild the live placeholder with accumulated content
   if (conv.streaming) {
@@ -657,9 +675,141 @@ function switchConversation(id) {
   renderWsTree();
   restoreOpenFiles();
   renderToolsView();
+  renderRewindBanner();
   setFilesActivityDot(false);
   if (state.terminalOpen) mountTerminal();
   saveState();
+}
+
+async function requestRewindTo(messageIndex) {
+  const conv = getCurrentConversation();
+  if (!conv) return;
+  if (conv.streaming) {
+    await confirmInline(
+      'Chat is still streaming',
+      'Stop the current generation before rewinding.',
+      { okLabel: 'OK', cancelLabel: ' ' }
+    );
+    return;
+  }
+  if (!Array.isArray(conv.messages) || messageIndex < 0 || messageIndex >= conv.messages.length) return;
+  const target = conv.messages[messageIndex];
+  if (!target || target.role !== 'user') return;
+  const preview = (target.content || '').split('\n')[0].slice(0, 80);
+  const ok = await confirmInline(
+    'Rewind to this point?',
+    `Messages from "${preview || '(empty)'}" onward will be removed. Files on disk aren’t touched — run "git status" after to inspect changes. You can undo from the banner.`,
+    { okLabel: 'Rewind', cancelLabel: 'Cancel' }
+  );
+  if (!ok) return;
+  rewindConversation(conv, messageIndex);
+}
+
+function rewindConversation(conv, messageIndex) {
+  const target = conv.messages[messageIndex];
+  const stashed = conv.messages.slice(messageIndex);
+  conv.rewindStash = {
+    messages: stashed,
+    sessionId: conv.sessionId,
+    pendingNewSession: !!conv.pendingNewSession,
+    at: Date.now(),
+    preview: (target.content || '').split('\n')[0].slice(0, 80),
+  };
+  conv.messages = conv.messages.slice(0, messageIndex);
+  sessionLogic.resetSessionForContextSwitch(conv, generateUUID);
+  // Pre-fill the input with the rewound prompt for easy re-steering
+  inputEl.value = target.content || '';
+  autoResize();
+  inputEl.focus();
+  // Re-render
+  messagesEl.innerHTML = '';
+  conv.messages.forEach((msg, idx) => {
+    if (msg.role === 'compact') {
+      messagesEl.appendChild(createCompactBannerEl(msg));
+      return;
+    }
+    messagesEl.appendChild(createMessageEl(msg.role, msg.content, false, msg.thinking || '', msg.attachments || null, msg.filesAccessed || null, msg.toolCalls || null, idx));
+  });
+  if (conv.messages.length === 0) {
+    welcomeEl.classList.remove('hidden');
+    messagesEl.classList.add('hidden');
+  }
+  saveState();
+  renderConversationList();
+  renderRewindBanner();
+  renderContextUsage();
+}
+
+function undoRewind(conv) {
+  if (!conv || !conv.rewindStash) return;
+  const stash = conv.rewindStash;
+  conv.messages = conv.messages.concat(stash.messages);
+  conv.sessionId = stash.sessionId;
+  conv.pendingNewSession = stash.pendingNewSession;
+  conv.rewindStash = null;
+  // Re-render
+  if (isCurrentConv(conv.id)) {
+    messagesEl.innerHTML = '';
+    conv.messages.forEach((msg, idx) => {
+      if (msg.role === 'compact') {
+        messagesEl.appendChild(createCompactBannerEl(msg));
+        return;
+      }
+      messagesEl.appendChild(createMessageEl(msg.role, msg.content, false, msg.thinking || '', msg.attachments || null, msg.filesAccessed || null, msg.toolCalls || null, idx));
+    });
+    welcomeEl.classList.add('hidden');
+    messagesEl.classList.remove('hidden');
+    scrollToBottom();
+    inputEl.value = '';
+    autoResize();
+    renderRewindBanner();
+    renderContextUsage();
+  }
+  saveState();
+  renderConversationList();
+}
+
+function renderRewindBanner() {
+  const conv = getCurrentConversation();
+  let banner = document.getElementById('rewind-banner');
+  if (!conv || !conv.rewindStash) {
+    if (banner) banner.remove();
+    return;
+  }
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'rewind-banner';
+    banner.className = 'rewind-banner';
+    const inputArea = document.getElementById('input-area');
+    inputArea.insertBefore(banner, inputArea.firstChild);
+  }
+  const stash = conv.rewindStash;
+  const count = stash.messages.length;
+  banner.innerHTML = '';
+  const label = document.createElement('span');
+  label.className = 'rewind-banner-label';
+  label.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="1 4 1 10 7 10"/>
+    <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+  </svg>Rewound ${count} message${count === 1 ? '' : 's'}. Files on disk unchanged.`;
+  banner.appendChild(label);
+  const undoBtn = document.createElement('button');
+  undoBtn.type = 'button';
+  undoBtn.className = 'rewind-banner-btn';
+  undoBtn.textContent = 'Undo';
+  undoBtn.addEventListener('click', () => undoRewind(conv));
+  banner.appendChild(undoBtn);
+  const dismissBtn = document.createElement('button');
+  dismissBtn.type = 'button';
+  dismissBtn.className = 'rewind-banner-btn rewind-banner-dismiss';
+  dismissBtn.title = 'Dismiss (keeps the rewind)';
+  dismissBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>`;
+  dismissBtn.addEventListener('click', () => {
+    if (conv) conv.rewindStash = null;
+    saveState();
+    renderRewindBanner();
+  });
+  banner.appendChild(dismissBtn);
 }
 
 async function deleteConversation(id) {
@@ -829,6 +979,7 @@ function newChat() {
   renderWsTabs();
   renderWsTree();
   renderToolsView();
+  renderRewindBanner();
   inputEl.focus();
 }
 
@@ -940,7 +1091,12 @@ function sendMessage(prompt) {
   const userMessage = { role: 'user', content: prompt };
   if (attachments.length) userMessage.attachments = attachments;
   conv.messages.push(userMessage);
-  messagesEl.appendChild(createMessageEl('user', prompt, false, '', attachments));
+  // Commit any pending rewind — sending a new message means we're moving on.
+  if (conv.rewindStash) {
+    conv.rewindStash = null;
+    renderRewindBanner();
+  }
+  messagesEl.appendChild(createMessageEl('user', prompt, false, '', attachments, null, null, conv.messages.length - 1));
   scrollToBottom();
   conv.pendingAttachments = [];
   saveState();
