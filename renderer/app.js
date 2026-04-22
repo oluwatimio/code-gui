@@ -50,7 +50,6 @@ const filePickerEl = document.getElementById('file-picker');
 const sendBtn = document.getElementById('send-btn');
 const stopBtn = document.getElementById('stop-btn');
 const statusText = document.getElementById('status-text');
-const costDisplay = document.getElementById('cost-display');
 const contextUsageEl = document.getElementById('context-usage');
 const contextUsageFillEl = contextUsageEl ? contextUsageEl.querySelector('.context-usage-fill') : null;
 const contextUsageLabelEl = contextUsageEl ? contextUsageEl.querySelector('.context-usage-label') : null;
@@ -483,7 +482,27 @@ function renderFilesAccessedBlock(msgEl, filesAccessed) {
   }
 }
 
-function createMessageEl(role, content, isStreaming = false, thinking = '', attachments = null, filesAccessed = null, toolCalls = null, messageIndex = null) {
+function renderAssistantStats(msgEl, stats) {
+  if (!msgEl || !stats) return;
+  const existing = msgEl.querySelector(':scope > .message-stats');
+  if (existing) existing.remove();
+  const parts = [];
+  if (stats.cost != null) parts.push(`$${Number(stats.cost).toFixed(4)}`);
+  if (stats.duration) parts.push(`${(stats.duration / 1000).toFixed(1)}s`);
+  if (stats.model) parts.push(String(stats.model));
+  if (!parts.length) return;
+  const footer = document.createElement('div');
+  footer.className = 'message-stats';
+  footer.textContent = parts.join(' · ');
+  if (stats.cost != null) {
+    footer.title = `${Number(stats.cost).toFixed(6)} USD` +
+      (stats.duration ? ` · ${(stats.duration / 1000).toFixed(2)}s` : '') +
+      (stats.model ? ` · ${stats.model}` : '');
+  }
+  msgEl.appendChild(footer);
+}
+
+function createMessageEl(role, content, isStreaming = false, thinking = '', attachments = null, filesAccessed = null, toolCalls = null, messageIndex = null, stats = null) {
   const msg = document.createElement('div');
   msg.className = `message message-${role}`;
   if (messageIndex != null) msg.dataset.msgIndex = String(messageIndex);
@@ -581,6 +600,9 @@ function createMessageEl(role, content, isStreaming = false, thinking = '', atta
   if (role === 'assistant' && Array.isArray(filesAccessed) && filesAccessed.length) {
     msg.appendChild(createFilesAccessedBlock(filesAccessed, false));
   }
+  if (role === 'assistant' && stats && !isStreaming) {
+    renderAssistantStats(msg, stats);
+  }
   return msg;
 }
 
@@ -641,7 +663,7 @@ function switchConversation(id) {
       messagesEl.appendChild(createCompactBannerEl(msg));
       return;
     }
-    messagesEl.appendChild(createMessageEl(msg.role, msg.content, false, msg.thinking || '', msg.attachments || null, msg.filesAccessed || null, msg.toolCalls || null, idx));
+    messagesEl.appendChild(createMessageEl(msg.role, msg.content, false, msg.thinking || '', msg.attachments || null, msg.filesAccessed || null, msg.toolCalls || null, idx, msg.stats || null));
   });
 
   // If this conversation is streaming, rebuild the live placeholder with accumulated content
@@ -730,7 +752,7 @@ function rewindConversation(conv, messageIndex) {
       messagesEl.appendChild(createCompactBannerEl(msg));
       return;
     }
-    messagesEl.appendChild(createMessageEl(msg.role, msg.content, false, msg.thinking || '', msg.attachments || null, msg.filesAccessed || null, msg.toolCalls || null, idx));
+    messagesEl.appendChild(createMessageEl(msg.role, msg.content, false, msg.thinking || '', msg.attachments || null, msg.filesAccessed || null, msg.toolCalls || null, idx, msg.stats || null));
   });
   if (conv.messages.length === 0) {
     welcomeEl.classList.remove('hidden');
@@ -757,7 +779,7 @@ function undoRewind(conv) {
         messagesEl.appendChild(createCompactBannerEl(msg));
         return;
       }
-      messagesEl.appendChild(createMessageEl(msg.role, msg.content, false, msg.thinking || '', msg.attachments || null, msg.filesAccessed || null, msg.toolCalls || null, idx));
+      messagesEl.appendChild(createMessageEl(msg.role, msg.content, false, msg.thinking || '', msg.attachments || null, msg.filesAccessed || null, msg.toolCalls || null, idx, msg.stats || null));
     });
     welcomeEl.classList.add('hidden');
     messagesEl.classList.remove('hidden');
@@ -1167,7 +1189,7 @@ function handleDelta(data) {
   setStatus('streaming', 'Generating...');
 }
 
-function finalizeStream(convId, { save = true } = {}) {
+function finalizeStream(convId, { save = true, stats = null } = {}) {
   const conv = getConversation(convId);
   if (!conv) return;
   const el = assistantElByConv.get(convId);
@@ -1202,7 +1224,9 @@ function finalizeStream(convId, { save = true } = {}) {
     };
     if (filesAccessed.length) m.filesAccessed = filesAccessed;
     if (toolCalls.length) m.toolCalls = toolCalls;
+    if (stats) m.stats = stats;
     conv.messages.push(m);
+    if (el && stats) renderAssistantStats(el, stats);
   }
 
   // Finalize any streaming tool-call block UI (stop spinners, collapse cleanly-resolved entries)
@@ -1272,7 +1296,10 @@ function notifyChatFinished(convId, { kind = 'done', detail = '' } = {}) {
 
 function handleStreamEnd(data) {
   if (!data || !data.convId) return;
-  finalizeStream(data.convId, { save: true });
+  const stats = (data.cost != null || data.duration || data.model)
+    ? { cost: data.cost ?? null, duration: data.duration ?? null, model: data.model || null }
+    : null;
+  finalizeStream(data.convId, { save: true, stats });
 
   // Fire desktop notification if the user isn't currently watching this chat
   let detail = '';
@@ -1281,14 +1308,6 @@ function handleStreamEnd(data) {
     if (data.duration) detail += ` · ${(data.duration / 1000).toFixed(1)}s`;
   }
   notifyChatFinished(data.convId, { kind: 'done', detail });
-
-  if (data.cost != null && isCurrentConv(data.convId)) {
-    const costStr = `$${data.cost.toFixed(4)}`;
-    const durationStr = data.duration ? `${(data.duration / 1000).toFixed(1)}s` : '';
-    const modelStr = data.model || '';
-    const parts = [costStr, durationStr, modelStr].filter(Boolean);
-    costDisplay.textContent = parts.join(' | ');
-  }
 
   if (isCurrentConv(data.convId)) setStatus('ready', 'Ready');
 }
@@ -2305,6 +2324,20 @@ function contextWindowFor(modelId) {
   return 200_000;
 }
 
+// The API-reported model (conv.contextModel) strips the `[1m]` suffix, so
+// it alone under-counts 1M-context chats. Prefer the larger of the selected
+// id and the reported id, and grow to 1M if we already observe more tokens
+// than the estimate allows.
+function effectiveContextWindow(conv) {
+  const fromSelected = contextWindowFor(conv && conv.model);
+  const fromReported = contextWindowFor(conv && conv.contextModel);
+  let max = Math.max(fromSelected, fromReported);
+  if (conv && conv.contextTokens && conv.contextTokens > max) {
+    max = 1_000_000;
+  }
+  return max;
+}
+
 function handleUsage(data) {
   if (!data || !data.convId) return;
   const conv = getConversation(data.convId);
@@ -2326,7 +2359,7 @@ function renderContextUsage() {
     contextUsageEl.classList.add('hidden');
     return;
   }
-  const max = contextWindowFor(conv.contextModel || conv.model);
+  const max = effectiveContextWindow(conv);
   const pct = Math.min(100, Math.max(0, (conv.contextTokens / max) * 100));
   contextUsageFillEl.style.width = `${pct.toFixed(1)}%`;
   contextUsageEl.classList.remove('hidden');
