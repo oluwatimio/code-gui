@@ -94,6 +94,8 @@ const terminalPanel = document.getElementById('terminal-panel');
 const terminalBody = document.getElementById('terminal-body');
 const terminalHandle = document.getElementById('terminal-resize-handle');
 const terminalLabel = document.getElementById('terminal-label');
+const terminalTabsEl = document.getElementById('terminal-tabs');
+const terminalNewTabBtn = document.getElementById('btn-terminal-new-tab');
 const toggleTerminalBtn = document.getElementById('btn-toggle-terminal');
 const killTerminalBtn = document.getElementById('btn-terminal-kill');
 const closeTerminalBtn = document.getElementById('btn-terminal-close');
@@ -831,13 +833,8 @@ async function deleteConversation(id) {
   }
 
   window.claude.stopGeneration(id);
-  window.terminal.kill(id);
+  if (conv) killAllTerminalsForConv(conv);
 
-  const entry = xtermByConv.get(id);
-  if (entry) {
-    try { entry.term.dispose(); } catch (e) {}
-    xtermByConv.delete(id);
-  }
   assistantElByConv.delete(id);
   const t = throttleTimerByConv.get(id);
   if (t) { clearTimeout(t); throttleTimerByConv.delete(id); }
@@ -2928,9 +2925,13 @@ function renderUnifiedDiff(oldText, newText) {
   return `<div class="tc-diff-block">${hunks}</div>`;
 }
 
-// ===== Terminal =====
-const xtermByConv = new Map(); // convId -> { term, fit, element }
-let currentTerminalConvId = null;
+// ===== Terminal (multi-tab) =====
+// A conversation owns an array of terminal tabs stored on the conversation
+// object (`conv.terminalTabs`, `conv.activeTerminalTabId`). Each tab has a
+// unique `termId`; the renderer keeps an xterm/fit/host element per termId
+// in `xtermByTerm`. The main process keys its PTY map on the same termId.
+const xtermByTerm = new Map(); // termId -> { term, fit, element, started, exited }
+let currentMountedTermId = null;
 let terminalResizeRaf = null;
 
 function applyTerminalVisibility() {
@@ -2948,9 +2949,21 @@ function updateTerminalLabel(conv) {
   terminalLabel.textContent = `Terminal${suffix}`;
 }
 
-function ensureTerminalFor(conv) {
-  if (!conv) return null;
-  let entry = xtermByConv.get(conv.id);
+function ensureTerminalTabs(conv) {
+  if (!conv) return;
+  if (!Array.isArray(conv.terminalTabs)) conv.terminalTabs = [];
+  if (conv.terminalTabs.length && !terminalTabs.findTab(conv.terminalTabs, conv.activeTerminalTabId)) {
+    conv.activeTerminalTabId = conv.terminalTabs[0].id;
+  }
+}
+
+function getActiveTab(conv) {
+  if (!conv || !Array.isArray(conv.terminalTabs)) return null;
+  return terminalTabs.findTab(conv.terminalTabs, conv.activeTerminalTabId);
+}
+
+function ensureXtermForTab(convId, tab) {
+  let entry = xtermByTerm.get(tab.id);
   if (entry) return entry;
 
   const monoFont = getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim() || 'monospace';
@@ -2972,25 +2985,30 @@ function ensureTerminalFor(conv) {
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   try { term.loadAddon(new WebLinksAddon.WebLinksAddon()); } catch (e) {}
-  term.onData((data) => window.terminal.input(conv.id, data));
+  term.onData((data) => window.terminal.input(tab.id, data));
 
   const element = document.createElement('div');
   element.className = 'xterm-host';
   element.style.width = '100%';
   element.style.height = '100%';
 
-  entry = { term, fit, element, started: false };
-  xtermByConv.set(conv.id, entry);
+  entry = { term, fit, element, started: false, exited: false, convId };
+  xtermByTerm.set(tab.id, entry);
   return entry;
 }
 
 function mountTerminal() {
   const conv = getCurrentConversation();
   if (!conv) return;
-  const entry = ensureTerminalFor(conv);
-  if (!entry) return;
+  ensureTerminalTabs(conv);
+  // If the chat has no tabs yet, create an initial one.
+  if (!conv.terminalTabs.length) {
+    createTerminalTab(conv, { mount: false });
+  }
+  const tab = getActiveTab(conv);
+  if (!tab) return;
+  const entry = ensureXtermForTab(conv.id, tab);
 
-  // Detach any currently mounted host from terminalBody
   while (terminalBody.firstChild) terminalBody.removeChild(terminalBody.firstChild);
   terminalBody.appendChild(entry.element);
 
@@ -2998,34 +3016,33 @@ function mountTerminal() {
     entry.term.open(entry.element);
     entry.started = true;
   }
-  fitTerminal(entry, conv.id);
+  fitTerminal(entry, tab.id);
   updateTerminalLabel(conv);
-  currentTerminalConvId = conv.id;
+  currentMountedTermId = tab.id;
 
-  // Spawn PTY if not already spawned (idempotent on main side)
-  const cols = entry.term.cols;
-  const rows = entry.term.rows;
   window.terminal.open({
-    sessionId: conv.id,
+    termId: tab.id,
     cwd: effectiveProjectPath(conv) || null,
-    cols,
-    rows,
+    cols: entry.term.cols,
+    rows: entry.term.rows,
   });
 
+  renderTerminalTabs(conv);
   setTimeout(() => entry.term.focus(), 50);
 }
 
 function unmountTerminal() {
   while (terminalBody.firstChild) terminalBody.removeChild(terminalBody.firstChild);
+  currentMountedTermId = null;
 }
 
-function fitTerminal(entry, sessionId) {
+function fitTerminal(entry, termId) {
   if (!entry || !entry.started) return;
   try {
     entry.fit.fit();
     const cols = entry.term.cols;
     const rows = entry.term.rows;
-    if (sessionId) window.terminal.resize(sessionId, cols, rows);
+    if (termId) window.terminal.resize(termId, cols, rows);
   } catch (e) {}
 }
 
@@ -3033,12 +3050,10 @@ function scheduleTerminalFit() {
   if (terminalResizeRaf) return;
   terminalResizeRaf = requestAnimationFrame(() => {
     terminalResizeRaf = null;
-    if (!state.terminalOpen) return;
-    const conv = getCurrentConversation();
-    if (!conv) return;
-    const entry = xtermByConv.get(conv.id);
+    if (!state.terminalOpen || !currentMountedTermId) return;
+    const entry = xtermByTerm.get(currentMountedTermId);
     if (!entry) return;
-    fitTerminal(entry, conv.id);
+    fitTerminal(entry, currentMountedTermId);
   });
 }
 
@@ -3059,24 +3074,175 @@ function toggleTerminal() {
   saveState();
 }
 
-function onTerminalData({ sessionId, data }) {
-  const entry = xtermByConv.get(sessionId);
+function createTerminalTab(conv, opts = {}) {
+  if (!conv) return null;
+  ensureTerminalTabs(conv);
+  const name = terminalTabs.generateDefaultName(conv.terminalTabs);
+  const tab = { id: generateUUID(), name };
+  conv.terminalTabs = terminalTabs.addTab(conv.terminalTabs, tab);
+  conv.activeTerminalTabId = tab.id;
+  saveState();
+  if (opts.mount !== false && state.terminalOpen && isCurrentConv(conv.id)) {
+    mountTerminal();
+  } else if (isCurrentConv(conv.id)) {
+    renderTerminalTabs(conv);
+  }
+  return tab;
+}
+
+function switchTerminalTab(conv, termId) {
+  if (!conv) return;
+  if (conv.activeTerminalTabId === termId) return;
+  if (!terminalTabs.findTab(conv.terminalTabs, termId)) return;
+  conv.activeTerminalTabId = termId;
+  saveState();
+  if (state.terminalOpen && isCurrentConv(conv.id)) {
+    mountTerminal();
+  } else if (isCurrentConv(conv.id)) {
+    renderTerminalTabs(conv);
+  }
+}
+
+function closeTerminalTab(conv, termId) {
+  if (!conv) return;
+  // Kill the PTY and dispose of the xterm
+  try { window.terminal.kill(termId); } catch (e) {}
+  const entry = xtermByTerm.get(termId);
+  if (entry) {
+    try { entry.term.dispose(); } catch (e) {}
+    xtermByTerm.delete(termId);
+  }
+  const { tabs, activeId } = terminalTabs.removeTab(conv.terminalTabs, conv.activeTerminalTabId, termId);
+  conv.terminalTabs = tabs;
+  conv.activeTerminalTabId = activeId;
+  saveState();
+  if (!isCurrentConv(conv.id)) return;
+  if (!tabs.length) {
+    // No tabs left — unmount and auto-close the panel.
+    unmountTerminal();
+    state.terminalOpen = false;
+    applyTerminalVisibility();
+    saveState();
+    renderTerminalTabs(conv);
+    return;
+  }
+  if (state.terminalOpen) mountTerminal();
+  else renderTerminalTabs(conv);
+}
+
+function renameTerminalTab(conv, termId, newName) {
+  if (!conv) return;
+  const before = conv.terminalTabs;
+  conv.terminalTabs = terminalTabs.renameTab(conv.terminalTabs, termId, newName);
+  if (conv.terminalTabs !== before) saveState();
+  if (isCurrentConv(conv.id)) renderTerminalTabs(conv);
+}
+
+function cycleTerminalTab(direction) {
+  const conv = getCurrentConversation();
+  if (!conv || !Array.isArray(conv.terminalTabs) || conv.terminalTabs.length < 2) return;
+  const next = terminalTabs.moveActiveIndex(conv.terminalTabs, conv.activeTerminalTabId, direction);
+  if (next && next !== conv.activeTerminalTabId) switchTerminalTab(conv, next);
+}
+
+function onTerminalData({ termId, data }) {
+  const entry = xtermByTerm.get(termId);
   if (entry) entry.term.write(data);
 }
 
-function onTerminalExit({ sessionId, code }) {
-  const entry = xtermByConv.get(sessionId);
-  if (entry) entry.term.write(`\r\n\x1b[33m[process exited: ${code}]\x1b[0m\r\n`);
+function onTerminalExit({ termId, code }) {
+  const entry = xtermByTerm.get(termId);
+  if (entry) {
+    entry.exited = true;
+    entry.term.write(`\r\n\x1b[33m[process exited: ${code}]\x1b[0m\r\n`);
+  }
+  const conv = getCurrentConversation();
+  if (conv && terminalTabs.findTab(conv.terminalTabs, termId)) renderTerminalTabs(conv);
 }
 
 function killCurrentTerminal() {
   const conv = getCurrentConversation();
   if (!conv) return;
-  window.terminal.kill(conv.id);
-  const entry = xtermByConv.get(conv.id);
+  const tab = getActiveTab(conv);
+  if (!tab) return;
+  window.terminal.kill(tab.id);
+  const entry = xtermByTerm.get(tab.id);
   if (entry) {
     entry.term.write('\r\n\x1b[31m[killed]\x1b[0m\r\n');
     entry.started = true;
+  }
+}
+
+function startRenameTerminalTab(conv, tab, nameEl) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'terminal-tab-name-input';
+  input.value = tab.name;
+  input.spellcheck = false;
+  nameEl.replaceWith(input);
+  input.focus();
+  input.select();
+  let committed = false;
+  const commit = (save) => {
+    if (committed) return;
+    committed = true;
+    if (save) renameTerminalTab(conv, tab.id, input.value);
+    else renderTerminalTabs(conv);
+  };
+  input.onclick = (e) => e.stopPropagation();
+  input.ondblclick = (e) => e.stopPropagation();
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+  };
+  input.onblur = () => commit(true);
+}
+
+function renderTerminalTabs(conv) {
+  if (!terminalTabsEl) return;
+  terminalTabsEl.innerHTML = '';
+  if (!conv || !Array.isArray(conv.terminalTabs)) return;
+  for (const tab of conv.terminalTabs) {
+    const entry = xtermByTerm.get(tab.id);
+    const item = document.createElement('div');
+    item.className = 'terminal-tab' +
+      (tab.id === conv.activeTerminalTabId ? ' active' : '') +
+      (entry && entry.exited ? ' exited' : '');
+
+    const name = document.createElement('span');
+    name.className = 'terminal-tab-name';
+    name.textContent = tab.name;
+    name.ondblclick = (e) => {
+      e.stopPropagation();
+      startRenameTerminalTab(conv, tab, name);
+    };
+    item.appendChild(name);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'terminal-tab-close';
+    closeBtn.title = 'Close tab';
+    closeBtn.innerHTML = `<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>`;
+    closeBtn.onclick = (e) => {
+      e.stopPropagation();
+      closeTerminalTab(conv, tab.id);
+    };
+    item.appendChild(closeBtn);
+
+    item.onclick = () => switchTerminalTab(conv, tab.id);
+    terminalTabsEl.appendChild(item);
+  }
+}
+
+function killAllTerminalsForConv(conv) {
+  if (!conv || !Array.isArray(conv.terminalTabs)) return;
+  for (const tab of conv.terminalTabs) {
+    try { window.terminal.kill(tab.id); } catch (e) {}
+    const entry = xtermByTerm.get(tab.id);
+    if (entry) {
+      try { entry.term.dispose(); } catch (e) {}
+      xtermByTerm.delete(tab.id);
+    }
   }
 }
 
@@ -3184,16 +3350,17 @@ function confirmInline(title, description, { okLabel = 'Continue', cancelLabel =
 }
 
 // ===== Worktree =====
+// Worktree toggle changes cwd; restart every terminal tab for the chat so
+// new tabs pick up the new working directory.
 function restartTerminalForConv(convId) {
-  window.terminal.kill(convId);
-  const entry = xtermByConv.get(convId);
-  if (entry) {
-    try { entry.term.dispose(); } catch (e) {}
-    xtermByConv.delete(convId);
-  }
-  if (state.terminalOpen && currentTerminalConvId === convId) {
-    currentTerminalConvId = null;
-    mountTerminal();
+  const conv = getConversation(convId);
+  if (!conv) return;
+  killAllTerminalsForConv(conv);
+  conv.terminalTabs = [];
+  conv.activeTerminalTabId = null;
+  saveState();
+  if (state.terminalOpen && isCurrentConv(convId)) {
+    mountTerminal(); // will create a fresh tab
   }
 }
 
@@ -4128,7 +4295,7 @@ function init() {
     renderConversationList();
     renderWsTabs();
     renderWsTree();
-    if (state.terminalOpen && currentTerminalConvId === conv.id) updateTerminalLabel(conv);
+    if (state.terminalOpen && isCurrentConv(conv.id)) updateTerminalLabel(conv);
   });
 
   // Attach files / images to the next message
@@ -4229,6 +4396,18 @@ function init() {
   closeTerminalBtn.addEventListener('click', () => {
     if (state.terminalOpen) toggleTerminal();
   });
+  if (terminalNewTabBtn) {
+    terminalNewTabBtn.addEventListener('click', () => {
+      let conv = getCurrentConversation();
+      if (!conv) conv = createConversation('New Chat');
+      if (!state.terminalOpen) {
+        state.terminalOpen = true;
+        applyTerminalVisibility();
+        applyTerminalHeight();
+      }
+      createTerminalTab(conv);
+    });
+  }
 
   // Keyboard shortcuts
   document.addEventListener('keydown', (e) => {

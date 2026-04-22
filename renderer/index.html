@@ -116,6 +116,12 @@
             </svg>
             <span id="terminal-label">Terminal</span>
           </div>
+          <div id="terminal-tabs" class="terminal-tabs"></div>
+          <button id="btn-terminal-new-tab" type="button" class="terminal-new-tab" title="New terminal tab">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 5v14M5 12h14"/>
+            </svg>
+          </button>
           <div class="terminal-actions">
             <button id="btn-terminal-kill" type="button" title="Kill shell">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -386,6 +392,7 @@
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
   <script src="../lib/session-logic.js"></script>
+  <script src="../lib/terminal-tabs.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

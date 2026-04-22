@@ -876,9 +876,11 @@ ipcMain.handle('worktree:remove', async (_, { worktreePath, force }) => {
 });
 
 // ===== Terminal (PTY) =====
-ipcMain.on('terminal:open', (event, { sessionId, cwd, cols, rows }) => {
-  if (!sessionId) return;
-  if (terminals.has(sessionId)) return;
+// Terminals are keyed by a `termId` — a UUID per tab, decoupled from convId
+// so a single chat can own many terminal tabs.
+ipcMain.on('terminal:open', (event, { termId, cwd, cols, rows }) => {
+  if (!termId) return;
+  if (terminals.has(termId)) return;
   const shell = process.env.SHELL
     || (process.platform === 'win32' ? 'powershell.exe' : '/bin/bash');
   const startDir = (cwd && fs.existsSync(cwd)) ? cwd : os.homedir();
@@ -892,46 +894,46 @@ ipcMain.on('terminal:open', (event, { sessionId, cwd, cols, rows }) => {
       env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
     });
   } catch (e) {
-    event.sender.send('terminal:exit', { sessionId, code: -1, error: e.message });
+    event.sender.send('terminal:exit', { termId, code: -1, error: e.message });
     return;
   }
   const entry = { pty: p, webContents: event.sender };
-  terminals.set(sessionId, entry);
+  terminals.set(termId, entry);
   p.onData((data) => {
     if (!event.sender.isDestroyed()) {
-      event.sender.send('terminal:data', { sessionId, data });
+      event.sender.send('terminal:data', { termId, data });
     }
   });
   p.onExit(({ exitCode }) => {
     if (!event.sender.isDestroyed()) {
-      event.sender.send('terminal:exit', { sessionId, code: exitCode });
+      event.sender.send('terminal:exit', { termId, code: exitCode });
     }
-    terminals.delete(sessionId);
+    terminals.delete(termId);
   });
 });
 
-ipcMain.on('terminal:input', (_, { sessionId, data }) => {
-  const t = terminals.get(sessionId);
+ipcMain.on('terminal:input', (_, { termId, data }) => {
+  const t = terminals.get(termId);
   if (t) {
     try { t.pty.write(data); } catch (e) {}
   }
 });
 
-ipcMain.on('terminal:resize', (_, { sessionId, cols, rows }) => {
-  const t = terminals.get(sessionId);
+ipcMain.on('terminal:resize', (_, { termId, cols, rows }) => {
+  const t = terminals.get(termId);
   if (!t) return;
   try { t.pty.resize(cols || 80, rows || 24); } catch (e) {}
 });
 
-ipcMain.on('terminal:kill', (_, { sessionId }) => {
-  const t = terminals.get(sessionId);
+ipcMain.on('terminal:kill', (_, { termId }) => {
+  const t = terminals.get(termId);
   if (t) {
     try { t.pty.kill(); } catch (e) {}
-    terminals.delete(sessionId);
+    terminals.delete(termId);
   }
 });
 
-ipcMain.handle('terminal:exists', async (_, { sessionId }) => terminals.has(sessionId));
+ipcMain.handle('terminal:exists', async (_, { termId }) => terminals.has(termId));
 
 // ===== Claude CLI Integration =====
 ipcMain.on('claude:send-prompt', (event, data) => {

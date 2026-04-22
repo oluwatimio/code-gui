@@ -174,10 +174,10 @@ contextBridge.exposeInMainWorld('gh', {
 
 contextBridge.exposeInMainWorld('terminal', {
   open: (params) => ipcRenderer.send('terminal:open', params),
-  input: (sessionId, data) => ipcRenderer.send('terminal:input', { sessionId, data }),
-  resize: (sessionId, cols, rows) => ipcRenderer.send('terminal:resize', { sessionId, cols, rows }),
-  kill: (sessionId) => ipcRenderer.send('terminal:kill', { sessionId }),
-  exists: (sessionId) => ipcRenderer.invoke('terminal:exists', { sessionId }),
+  input: (termId, data) => ipcRenderer.send('terminal:input', { termId, data }),
+  resize: (termId, cols, rows) => ipcRenderer.send('terminal:resize', { termId, cols, rows }),
+  kill: (termId) => ipcRenderer.send('terminal:kill', { termId }),
+  exists: (termId) => ipcRenderer.invoke('terminal:exists', { termId }),
   onData: (cb) => ipcRenderer.on('terminal:data', (_, payload) => cb(payload)),
   onExit: (cb) => ipcRenderer.on('terminal:exit', (_, payload) => cb(payload)),
 });
