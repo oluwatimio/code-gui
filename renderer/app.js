@@ -15,6 +15,7 @@ const state = {
   terminalOpen: false,
   terminalHeight: 240,
   defaultModel: null, // last model the user picked; used as initial model for new conversations
+  themePreference: 'system', // 'system' | 'light' | 'dark'
 };
 
 // Per-conversation DOM + timer refs (not persisted)
@@ -1099,6 +1100,7 @@ function saveState() {
       terminalOpen: state.terminalOpen,
       terminalHeight: state.terminalHeight,
       defaultModel: state.defaultModel,
+      themePreference: state.themePreference,
     }));
   } catch (e) {
     // Silently fail on storage quota
@@ -1151,6 +1153,9 @@ function loadState() {
       }
       if (data.defaultModel === null || typeof data.defaultModel === 'string') {
         state.defaultModel = data.defaultModel;
+      }
+      if (data.themePreference === 'system' || data.themePreference === 'light' || data.themePreference === 'dark') {
+        state.themePreference = data.themePreference;
       }
 
       // Reset any in-flight stream flags — processes don't survive app restarts
@@ -3681,6 +3686,35 @@ function getActiveTab(conv) {
   return terminalTabs.findTab(conv.terminalTabs, conv.activeTerminalTabId);
 }
 
+const TERMINAL_THEMES = {
+  dark: {
+    background: '#000000',
+    foreground: '#f0f0f0',
+    cursor: '#00d26a',
+    cursorAccent: '#000000',
+    selectionBackground: 'rgba(0, 210, 106, 0.25)',
+  },
+  light: {
+    background: '#fafafa',
+    foreground: '#1a1a1a',
+    cursor: '#018f4a',
+    cursorAccent: '#fafafa',
+    selectionBackground: 'rgba(1, 143, 74, 0.2)',
+  },
+};
+
+function currentTerminalTheme() {
+  return TERMINAL_THEMES[resolveTheme(state.themePreference)] || TERMINAL_THEMES.dark;
+}
+
+function applyTerminalTheme() {
+  const theme = currentTerminalTheme();
+  for (const entry of xtermByTerm.values()) {
+    if (!entry || !entry.term) continue;
+    try { entry.term.options.theme = theme; } catch (e) {}
+  }
+}
+
 function ensureXtermForTab(convId, tab) {
   let entry = xtermByTerm.get(tab.id);
   if (entry) return entry;
@@ -3689,13 +3723,7 @@ function ensureXtermForTab(convId, tab) {
   const term = new Terminal({
     fontFamily: monoFont,
     fontSize: 12,
-    theme: {
-      background: '#000000',
-      foreground: '#f0f0f0',
-      cursor: '#00d26a',
-      cursorAccent: '#000000',
-      selectionBackground: 'rgba(0, 210, 106, 0.25)',
-    },
+    theme: currentTerminalTheme(),
     cursorBlink: true,
     scrollback: 5000,
     convertEol: true,
@@ -5036,9 +5064,55 @@ function prefillChatInput(text) {
   try { inputEl.setSelectionRange(end, end); } catch (e) {}
 }
 
+// ===== Theme =====
+// Three-state preference: 'system' follows prefers-color-scheme; 'light' /
+// 'dark' pin the theme. The applier flips a class on <html> so CSS variables
+// defined under :root / :root.theme-light switch together, and swaps the
+// highlight.js stylesheet so code blocks track the theme too.
+const systemThemeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+
+function resolveTheme(pref) {
+  if (pref === 'light' || pref === 'dark') return pref;
+  if (systemThemeMedia && systemThemeMedia.matches) return 'dark';
+  return 'light';
+}
+
+function applyTheme() {
+  const resolved = resolveTheme(state.themePreference);
+  document.documentElement.classList.toggle('theme-light', resolved === 'light');
+  document.documentElement.classList.toggle('theme-dark', resolved === 'dark');
+  const link = document.getElementById('hljs-theme');
+  if (link) {
+    const href = resolved === 'light'
+      ? '../node_modules/highlight.js/styles/github.min.css'
+      : '../node_modules/highlight.js/styles/github-dark.min.css';
+    if (link.getAttribute('href') !== href) link.setAttribute('href', href);
+  }
+  applyTerminalTheme();
+  renderSettingsMenu();
+}
+
+function renderSettingsMenu() {
+  document.querySelectorAll('.settings-theme-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.theme === (state.themePreference || 'system'));
+  });
+}
+
+function setThemePreference(pref) {
+  state.themePreference = pref;
+  saveState();
+  applyTheme();
+}
+
 function init() {
   // Load state
   loadState();
+  applyTheme();
+  if (systemThemeMedia && typeof systemThemeMedia.addEventListener === 'function') {
+    systemThemeMedia.addEventListener('change', () => {
+      if (state.themePreference === 'system') applyTheme();
+    });
+  }
   // Restore the last-used workspace tab (Edits / Files / Tools)
   currentWorkspaceView = state.workspaceView || 'edits';
   applyWorkspaceViewTab(currentWorkspaceView);
@@ -5334,6 +5408,28 @@ function init() {
   document.getElementById('btn-toggle-sidebar').addEventListener('click', () => sidebar.classList.toggle('collapsed'));
   toggleWorkspaceBtn.addEventListener('click', toggleWorkspace);
   togglePrBtn.addEventListener('click', togglePrPanel);
+
+  // Settings menu
+  const settingsBtn = document.getElementById('btn-settings');
+  const settingsMenu = document.getElementById('settings-menu');
+  if (settingsBtn && settingsMenu) {
+    settingsBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      settingsMenu.classList.toggle('hidden');
+      if (!settingsMenu.classList.contains('hidden')) renderSettingsMenu();
+    });
+    settingsMenu.querySelectorAll('.settings-theme-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setThemePreference(btn.dataset.theme);
+      });
+    });
+    document.addEventListener('click', (e) => {
+      if (settingsMenu.classList.contains('hidden')) return;
+      if (settingsBtn.contains(e.target) || settingsMenu.contains(e.target)) return;
+      settingsMenu.classList.add('hidden');
+    });
+  }
   prBackBtn.addEventListener('click', () => {
     prState.currentPr = null;
     showPrView('list');
