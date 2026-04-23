@@ -25,6 +25,12 @@
   --overlay-backdrop: rgba(0, 0, 0, 0.6);
   --shadow-sm: 0 4px 20px rgba(0, 0, 0, 0.3);
   --shadow-md: 0 8px 40px rgba(0, 0, 0, 0.4);
+  --diff-hunk-text: #7aa3ff;
+  --diff-hunk-bg: rgba(122, 163, 255, 0.06);
+  --diff-add-text: #a6f3c8;
+  --diff-add-gutter: #7cd6a5;
+  --diff-del-text: #ffb4b4;
+  --diff-del-gutter: #ff8c8c;
   --shadow-input-focus: 0 0 0 1px var(--border-strong), var(--shadow-md);
   --font-sans: 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
@@ -68,6 +74,12 @@
   --overlay-backdrop: rgba(0, 0, 0, 0.35);
   --shadow-sm: 0 2px 6px rgba(15, 23, 42, 0.08), 0 1px 2px rgba(15, 23, 42, 0.06);
   --shadow-md: 0 10px 28px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.08);
+  --diff-hunk-text: #3b5bdb;
+  --diff-hunk-bg: rgba(59, 91, 219, 0.08);
+  --diff-add-text: #0a6c3d;
+  --diff-add-gutter: #137a44;
+  --diff-del-text: #a11d1d;
+  --diff-del-gutter: #b52626;
 }
 
 /* ===== Reset & Base ===== */
@@ -278,11 +290,12 @@ html, body {
   cursor: pointer;
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
-  transition: color var(--transition-fast), border-color var(--transition-fast);
+  transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
 }
 
 .sidebar-tab:hover {
   color: var(--text-primary);
+  background: var(--bg-surface);
 }
 
 .sidebar-tab.active {
@@ -331,13 +344,12 @@ html, body {
   border-radius: var(--radius-sm);
   cursor: pointer;
   color: var(--text-secondary);
-  transition: background var(--transition-fast), box-shadow var(--transition-fast);
+  transition: background var(--transition-fast);
   margin-bottom: 4px;
 }
 
 .memory-item:hover {
   background: var(--bg-surface);
-  box-shadow: var(--shadow-sm);
 }
 
 .memory-item.expanded {
@@ -507,7 +519,6 @@ html, body {
 .conversation-item:hover {
   background: var(--bg-tertiary);
   color: var(--text-primary);
-  box-shadow: var(--shadow-sm);
 }
 .conversation-item.active {
   background: var(--bg-surface);
@@ -3882,8 +3893,9 @@ body.ws-resizing-col .side-resize {
 .tool-call-body {
   display: none;
   padding: 8px 10px;
-  border-top: 1px solid var(--border, rgba(255,255,255,0.05));
-  background: rgba(0,0,0,0.2);
+  border-top: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
 }
 .tool-call.expanded .tool-call-body { display: block; }
 
@@ -3925,7 +3937,7 @@ body.ws-resizing-col .side-resize {
   max-height: 360px;
   overflow-y: auto;
 }
-.tc-code-bash { color: #d6d6d6; }
+.tc-code-bash { color: var(--text-primary); }
 .tc-diff-old {
   background: rgba(255, 80, 80, 0.08);
   border-left: 2px solid rgba(255, 80, 80, 0.4);
@@ -4331,7 +4343,7 @@ body.ws-resizing-col .side-resize {
 
 /* ===== Unified diff (Edit / MultiEdit tool calls) ===== */
 .tc-diff-block {
-  background: rgba(0,0,0,0.4);
+  background: var(--code-bg);
   border-radius: 4px;
   font-family: var(--font-mono, monospace);
   font-size: 11.5px;
@@ -4342,10 +4354,10 @@ body.ws-resizing-col .side-resize {
 
 .diff-hunk-header {
   padding: 3px 10px;
-  color: #7aa3ff;
-  background: rgba(122, 163, 255, 0.06);
-  border-top: 1px solid var(--border, rgba(255,255,255,0.06));
-  border-bottom: 1px solid var(--border, rgba(255,255,255,0.06));
+  color: var(--diff-hunk-text);
+  background: var(--diff-hunk-bg);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   font-size: 11px;
   white-space: pre;
 }
@@ -4389,10 +4401,10 @@ body.ws-resizing-col .side-resize {
 }
 .diff-line.diff-add .diff-sign,
 .diff-line.diff-add .diff-body {
-  color: #a6f3c8;
+  color: var(--diff-add-text);
 }
 .diff-line.diff-add .diff-gutter-new {
-  color: #7cd6a5;
+  color: var(--diff-add-gutter);
   opacity: 0.9;
 }
 
@@ -4401,10 +4413,10 @@ body.ws-resizing-col .side-resize {
 }
 .diff-line.diff-del .diff-sign,
 .diff-line.diff-del .diff-body {
-  color: #ffb4b4;
+  color: var(--diff-del-text);
 }
 .diff-line.diff-del .diff-gutter-old {
-  color: #ff8c8c;
+  color: var(--diff-del-gutter);
   opacity: 0.9;
 }
 
