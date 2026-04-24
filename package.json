@@ -1,6 +1,6 @@
 {
   "name": "code-gui",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Beautiful desktop GUI for Claude Code CLI (macOS, Linux, Windows)",
   "main": "main.js",
   "scripts": {
@@ -87,6 +87,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "lib/**/*",
       "renderer/**/*",
       "assets/**/*",
       "node_modules/**/*"
