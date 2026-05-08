@@ -4567,13 +4567,25 @@ body.ws-resizing-col .side-resize {
 }
 .sidebar-tab-badge.hidden { display: none; }
 
-/* Header — visually grouped, divider below */
+/* Header — visually grouped, divider below. flex-shrink:0 so it doesn't get
+   squeezed when the queue/drafts list grows. */
 .auto-header {
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 12px 14px;
   border-bottom: 1px solid var(--border, rgba(255,255,255,0.08));
+  flex-shrink: 0;
+}
+
+/* Scroll wrapper for queue + drafts. Takes the remaining vertical space and
+   actually scrolls; without min-height:0 the flex child refuses to shrink
+   below its content height inside #auto-panel (which has overflow:hidden). */
+.auto-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .auto-master-row {
